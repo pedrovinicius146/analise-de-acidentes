@@ -1,18 +1,25 @@
+
 import os
 import glob
 import pandas as pd
 import matplotlib.pyplot as plt
 
+# ============================
+# CONFIGURAÇÕES DE DIRETÓRIOS
+# ============================
 
 BASE_DIR = "./BASES"
 OUT_CSV = "./RESULTADOS_CSV"
 OUT_GRAFICOS = "./RESULTADOS_GRAFICOS"
 OUT_LIMPOS = "./RESULTADOS_LIMPOS"
 
-
+# Criar diretórios de saída caso não existam
 for p in [OUT_CSV, OUT_GRAFICOS, OUT_LIMPOS]:
     os.makedirs(p, exist_ok=True)
 
+# ============================
+# LOCALIZAR ARQUIVOS CSV
+# ============================
 
 pattern = os.path.join(BASE_DIR, "*acidentes*.csv")
 files = glob.glob(pattern)
@@ -24,15 +31,16 @@ print("Arquivos encontrados:")
 for f in files:
     print(" -", f)
 
+# ============================
+# FUNÇÃO ROBUSTA PARA LEITURA
+# ============================
+
 def try_read_csv(path):
     tried = []
     for sep in [';', ',', ';']:
-        for enc in ['utf-8','latin-1','cp1252']:
+        for enc in ['utf-8', 'latin-1', 'cp1252']:
             try:
-                if sep == ';':
-                    df = pd.read_csv(path, sep=';', encoding=enc, engine='python', quotechar='"')
-                else:
-                    df = pd.read_csv(path, sep=sep, encoding=enc, low_memory=False)
+                df = pd.read_csv(path, sep=sep, encoding=enc, low_memory=False)
                 print(f"Leitura OK: sep='{sep}', enc='{enc}' -> shape {df.shape}")
                 return df
             except Exception as e:
@@ -41,6 +49,10 @@ def try_read_csv(path):
     print("Falhou, primeiras tentativas com erro:", tried[:5])
     raise ValueError("Falha ao ler CSV")
 
+
+# ============================
+# CARREGAR E UNIFICAR BASES
+# ============================
 
 dfs = []
 for file in files:
@@ -51,12 +63,17 @@ for file in files:
 df = pd.concat(dfs, ignore_index=True, sort=False)
 print("Dimensão após concat:", df.shape)
 
+# ============================
+# PADRONIZAÇÃO DE COLUNAS
+# ============================
 
 df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
 
+# Detectar coluna de data automaticamente
 date_candidates = [c for c in df.columns if "data" in c]
 date_col = "data_inversa" if "data_inversa" in df.columns else (date_candidates[0] if date_candidates else None)
 
+# Converter datas
 if date_col:
     df["event_date"] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce")
 else:
@@ -65,47 +82,48 @@ else:
 df["year"] = df["event_date"].dt.year
 df["month_str"] = df["event_date"].dt.strftime("%Y-%m")
 
-
+# UF / Estado
 if "uf" in df.columns:
     df["state"] = df["uf"].astype(str).str.strip().str.upper()
 
+# Cidade
 city_col = next((c for c in ["municipio", "cidade"] if c in df.columns), None)
 df["city"] = df[city_col].astype(str).str.title() if city_col else None
 
-
+# Causa
 cause_col = next((c for c in df.columns if "causa" in c), None)
 df["cause"] = df[cause_col].astype(str).str.lower() if cause_col else None
 
-
+# Converter colunas numéricas de vítimas
 sev_cols = [c for c in df.columns if any(x in c for x in ["morto", "ferid", "vitim"])]
 for c in sev_cols:
     df[c] = pd.to_numeric(df[c], errors="coerce")
 
-
-
+# ============================
+# EXPORTAR CSVs BÁSICOS
+# ============================
 
 years_df = df["year"].value_counts().sort_index().reset_index()
 years_df.columns = ["year", "count"]
 years_df.to_csv(f"{OUT_CSV}/contagem_por_ano_acidentes.csv", index=False)
 
-
 ts_month = df.groupby("month_str").size().reset_index(name="accidents_count")
 ts_month.to_csv(f"{OUT_CSV}/acidentes_por_mes.csv", index=False)
-
 
 top_states = df["state"].value_counts().reset_index()
 top_states.columns = ["state", "count"]
 top_states.to_csv(f"{OUT_CSV}/top_estados_acidentes.csv", index=False)
 
-
 top_causes = df["cause"].value_counts().reset_index()
 top_causes.columns = ["cause", "count"]
 top_causes.to_csv(f"{OUT_CSV}/top_causas_acidentes.csv", index=False)
 
-
 cols_save = ["event_date", "year", "month_str", "state", "city", "cause"] + sev_cols
 df[cols_save].to_csv(f"{OUT_LIMPOS}/acidentes_limpo_unificado.csv", index=False)
 
+# ============================
+# GRÁFICOS BÁSICOS
+# ============================
 
 plt.figure(figsize=(12,5))
 plt.plot(ts_month["month_str"], ts_month["accidents_count"])
@@ -115,7 +133,6 @@ plt.tight_layout()
 plt.savefig(f"{OUT_GRAFICOS}/plot_acidentes_por_mes.png")
 plt.close()
 
-
 top15 = top_states.head(15).iloc[::-1]
 plt.figure(figsize=(10,6))
 plt.barh(top15["state"], top15["count"])
@@ -124,12 +141,13 @@ plt.tight_layout()
 plt.savefig(f"{OUT_GRAFICOS}/top15_estados_acidentes.png")
 plt.close()
 
-
-
+# ============================
+# ANÁLISES AVANÇADAS
+# ============================
 
 print("\n=== Gerando análises avançadas... ===\n")
 
-
+# --- Acidentes por dia da semana ---
 weekday_count = df['event_date'].dt.day_name().value_counts().reset_index()
 weekday_count.columns = ["weekday", "count"]
 weekday_count.to_csv(f"{OUT_CSV}/acidentes_por_dia_semana.csv", index=False)
@@ -143,25 +161,7 @@ plt.savefig(f"{OUT_GRAFICOS}/acidentes_por_dia_semana.png")
 plt.close()
 
 
-
-if "horario" in df.columns:
-    df["hour"] = pd.to_datetime(df["horario"], errors="coerce").dt.hour
-    hour_count = df["hour"].value_counts().sort_index().reset_index()
-    hour_count.columns = ["hour", "count"]
-    hour_count.to_csv(f"{OUT_CSV}/acidentes_por_horario.csv", index=False)
-
-    plt.figure(figsize=(12,5))
-    plt.plot(hour_count["hour"], hour_count["count"])
-    plt.title("Acidentes por Horário")
-    plt.xlabel("Hora")
-    plt.ylabel("Acidentes")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(f"{OUT_GRAFICOS}/acidentes_por_horario.png")
-    plt.close()
-
-
-
+# --- Heatmap Ano x Mês ---
 pivot = df.pivot_table(index="year", columns=df["event_date"].dt.month, aggfunc="size", fill_value=0)
 
 plt.figure(figsize=(12,6))
@@ -175,8 +175,7 @@ plt.close()
 
 pivot.to_csv(f"{OUT_CSV}/heatmap_ano_mes.csv")
 
-
-
+# --- Top Cidades ---
 top_cities = df["city"].value_counts().head(20).reset_index()
 top_cities.columns = ["city", "count"]
 top_cities.to_csv(f"{OUT_CSV}/top20_cidades.csv", index=False)
@@ -188,19 +187,7 @@ plt.tight_layout()
 plt.savefig(f"{OUT_GRAFICOS}/top20_cidades.png")
 plt.close()
 
-
-top20_causas = df["cause"].value_counts().head(20).reset_index()
-top20_causas.columns = ["cause", "count"]
-top20_causas.to_csv(f"{OUT_CSV}/top20_causas.csv", index=False)
-
-plt.figure(figsize=(10,6))
-plt.barh(top20_causas["cause"], top20_causas["count"])
-plt.title("Top 20 causas de acidentes")
-plt.tight_layout()
-plt.savefig(f"{OUT_GRAFICOS}/top20_causas.png")
-plt.close()
-
-
+# --- Gravidade por Estado ---
 grav_cols = [c for c in df.columns if "morto" in c or "ferid" in c]
 
 if grav_cols:
@@ -214,7 +201,7 @@ if grav_cols:
     plt.savefig(f"{OUT_GRAFICOS}/gravidade_por_estado.png")
     plt.close()
 
-
+# --- Correlação ---
 if len(grav_cols) >= 2:
     corr_df = df[grav_cols].corr()
     corr_df.to_csv(f"{OUT_CSV}/correlacao_vitimas.csv")
@@ -229,10 +216,11 @@ if len(grav_cols) >= 2:
     plt.savefig(f"{OUT_GRAFICOS}/correlacao_vitimas.png")
     plt.close()
 
-
 print("=== Análises avançadas concluídas! ===\n")
 
-
+# ============================
+# FINALIZAÇÃO
+# ============================
 
 print("\n===============================")
 print("Processo concluído!")
